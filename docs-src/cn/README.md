@@ -164,7 +164,7 @@ proxyServer.close();
   * 样例
 
   ```js
-    const AnyProxy = require('AnyProxy');
+    const AnyProxy = require('anyproxy');
     const exec = require('child_process').exec;
 
     if (!AnyProxy.utils.certMgr.ifRootCAFileExists()) {
@@ -199,6 +199,14 @@ anyproxy --intercept #启动AnyProxy，并解析所有https请求
 ```
 
 * [附录：如何信任CA证书](#证书配置)
+
+# 代理WebSocket
+
+```bash
+anyproxy --ws-intercept
+```
+
+> 当启用`HTTPS`代理时，`wss`也会被代理，但是不会被AnyProxy记录。需要开启`--ws-intercept`后才会从界面上看到相应内容。
 
 # rule模块
 
@@ -818,6 +826,8 @@ module.exports = {
 * 证书下载到指定目录后，需要从其他入口进行安装，包括：
   * 设置 -> 安全性与位置信息 -> 加密与凭据 -> 从存储设备安装。找到你下载的证书文件，进行安装
   * 设置 -> 安全 -> 从SD卡安装证书。找到你下载的证书文件，进行安装
+
+不同安卓系统支持安装的证书文件类型不尽相同，大多支持安装拓展名为 .crt 的证书文件，少部分仅支持 .cer 文件（已知如 OPPO R15），AnyProxy 提供了多种类型的证书文件，可在下载安装时选择。
 
 ### 配置iOS/Android系统代理
 
