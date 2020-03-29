@@ -5,14 +5,12 @@ const http = require('http'),
   async = require('async'),
   color = require('colorful'),
   certMgr = require('./lib/certMgr'),
-  Recorder = require('./lib/recorder'),
+  // Recorder = require('./lib/recorder'),
   logUtil = require('./lib/log'),
-  util = require('./lib/util'),
+  // util = require('./lib/util'),
   events = require('events'),
-  co = require('co'),
-  WebInterface = require('./lib/webInterface'),
-  wsServerMgr = require('./lib/wsServerMgr'),
-  ThrottleGroup = require('stream-throttle').ThrottleGroup;
+  wsServerMgr = require('./lib/wsServerMgr')
+;
 
 // const memwatch = require('memwatch-next');
 
@@ -75,18 +73,47 @@ class ProxyCore extends events.EventEmitter {
     this.proxyHostName = config.hostname || 'localhost';
     this.recorder = config.recorder;
 
-    if (parseInt(process.versions.node.split('.')[0], 10) < 4) {
-      throw new Error('node.js >= v4.x is required for anyproxy');
-    } else if (config.forceProxyHttps && !certMgr.ifRootCAFileExists()) {
-      logUtil.printLog('You can run `anyproxy-ca` to generate one root CA and then re-run this command');
-      throw new Error('root CA not found. Please run `anyproxy-ca` to generate one first.');
-    } else if (this.proxyType === T_TYPE_HTTPS && !config.hostname) {
+    // if (parseInt(process.versions.node.split('.')[0], 10) < 4) {
+    //   throw new Error('node.js >= v4.x is required for anyproxy');
+    // }
+
+    if (!certMgr.ifRootCAFileExists()) {
+      certMgr.generateRootCA((error, keyPath, crtPath) => {
+        if (error) {
+          console.error('failed to generate rootCA', error);
+          process.exit(0);
+        }
+        this._setup(config);
+        // else {
+        //   const certDir = path.dirname(keyPath);
+        //   console.log(`The cert is generated at ${certDir}. Please trust the ${color.bold('rootCA.crt')}.`);
+        //   // TODO: console.log('guide to install');
+        //   openFolderOfFile(crtPath);
+        // }
+      });
+    }
+    else {
+      this._setup(config);
+    }
+
+
+  }
+  _setup(config) {
+
+    // if (config.forceProxyHttps && !certMgr.ifRootCAFileExists()) {
+    //   logUtil.printLog('You can run `anyproxy-ca` to generate one root CA and then re-run this command');
+    //   throw new Error('root CA not found. Please run `anyproxy-ca` to generate one first.');
+    // }
+    // else
+    if (this.proxyType === T_TYPE_HTTPS && !config.hostname) {
       throw new Error('hostname is required in https proxy');
     } else if (!this.proxyPort) {
       throw new Error('proxy port is required');
-    } else if (!this.recorder) {
-      throw new Error('recorder is required');
-    } else if (config.forceProxyHttps && config.rule && config.rule.beforeDealHttpsRequest) {
+    }
+    // else if (!this.recorder) {
+    //   throw new Error('recorder is required');
+    // }
+    else if (config.forceProxyHttps && config.rule && config.rule.beforeDealHttpsRequest) {
       logUtil.printLog('both "-i(--intercept)" and rule.beforeDealHttpsRequest are specified, the "-i" option will be ignored.', logUtil.T_WARN);
       config.forceProxyHttps = false;
     }
@@ -107,6 +134,8 @@ class ProxyCore extends events.EventEmitter {
       if (rate < 1) {
         throw new Error('Invalid throttle rate value, should be positive integer');
       }
+
+      const ThrottleGroup = require('stream-throttle').ThrottleGroup;
       global._throttle = new ThrottleGroup({ rate: 1024 * rate }); // rate - byte/sec
     }
 
@@ -114,7 +143,8 @@ class ProxyCore extends events.EventEmitter {
     this.recorder = config.recorder;
 
     // init request handler
-    const RequestHandler = util.freshRequire('./requestHandler');
+    const RequestHandler = require('./lib/requestHandler.js') //util.freshRequire('./requestHandler');
+
     this.requestHandler = new RequestHandler({
       wsIntercept: config.wsIntercept,
       httpServerPort: config.port, // the http server port for http proxy
@@ -122,7 +152,6 @@ class ProxyCore extends events.EventEmitter {
       dangerouslyIgnoreUnauthorized: !!config.dangerouslyIgnoreUnauthorized
     }, this.proxyRule, this.recorder);
   }
-
   /**
   * manage all created socket
   * for each new socket, we put them to a map;
@@ -161,13 +190,13 @@ class ProxyCore extends events.EventEmitter {
     }
     async.series(
       [
-        //creat proxy server
+        // create proxy server
         function (callback) {
           if (self.proxyType === T_TYPE_HTTPS) {
-            certMgr.getCertificate(self.proxyHostName, (err, keyContent, crtContent) => {
-              if (err) {
+            certMgr.getCertificate(self.proxyHostName, function (err, keyContent, crtContent) {
+              if (err)
                 callback(err);
-              } else {
+              else {
                 self.httpProxyServer = https.createServer({
                   key: keyContent,
                   cert: crtContent
@@ -175,7 +204,8 @@ class ProxyCore extends events.EventEmitter {
                 callback(null);
               }
             });
-          } else {
+          }
+          else {
             self.httpProxyServer = http.createServer(self.requestHandler.userRequestHandler);
             callback(null);
           }
@@ -184,7 +214,6 @@ class ProxyCore extends events.EventEmitter {
         //handle CONNECT request for https over http
         function (callback) {
           self.httpProxyServer.on('connect', self.requestHandler.connectReqHandler);
-
           callback(null);
         },
 
@@ -208,7 +237,7 @@ class ProxyCore extends events.EventEmitter {
       ],
 
       //final callback
-      (err, result) => {
+      async function (err, result) {
         if (!err) {
           const tipText = (self.proxyType === T_TYPE_HTTP ? 'Http' : 'Https') + ' proxy started on port ' + self.proxyPort;
           logUtil.printLog(color.green(tipText));
@@ -218,23 +247,19 @@ class ProxyCore extends events.EventEmitter {
             logUtil.printLog(color.green(webTip));
           }
 
-          let ruleSummaryString = '';
-          const ruleSummary = this.proxyRule.summary;
+          const ruleSummary = self.proxyRule.summary;
           if (ruleSummary) {
-            co(function *() {
-              if (typeof ruleSummary === 'string') {
-                ruleSummaryString = ruleSummary;
-              } else {
-                ruleSummaryString = yield ruleSummary();
-              }
-
+              const ruleSummaryString = (typeof ruleSummary === 'string')
+                ? ruleSummary
+                : await ruleSummary()
+              ;
               logUtil.printLog(color.green(`Active rule is: ${ruleSummaryString}`));
-            });
           }
 
           self.status = PROXY_STATUS_READY;
           self.emit('ready');
-        } else {
+        }
+        else {
           const tipText = 'err when start proxy server :(';
           logUtil.printLog(color.red(tipText), logUtil.T_ERR);
           logUtil.printLog(err, logUtil.T_ERR);
@@ -313,7 +338,9 @@ class ProxyServer extends ProxyCore {
    */
   constructor(config) {
     // prepare a recorder
-    const recorder = new Recorder();
+
+    const recorder = null //new Recorder();
+
     const configForCore = Object.assign({
       recorder,
     }, config);
@@ -328,6 +355,7 @@ class ProxyServer extends ProxyCore {
   start() {
     // start web interface if neeeded
     if (this.proxyWebinterfaceConfig && this.proxyWebinterfaceConfig.enable) {
+      const WebInterface = require('./lib/webInterface');
       this.webServerInstance = new WebInterface(this.proxyWebinterfaceConfig, this.recorder);
       // start web server
       this.webServerInstance.start().then(() => {
@@ -379,8 +407,8 @@ class ProxyServer extends ProxyCore {
 
 module.exports.ProxyCore = ProxyCore;
 module.exports.ProxyServer = ProxyServer;
-module.exports.ProxyRecorder = Recorder;
-module.exports.ProxyWebServer = WebInterface;
+// module.exports.ProxyRecorder = Recorder;
+// module.exports.ProxyWebServer = WebInterface;
 module.exports.utils = {
   systemProxyMgr: require('./lib/systemProxyMgr'),
   certMgr,
